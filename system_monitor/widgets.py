@@ -6,8 +6,8 @@ import math
 from collections import deque
 
 
-# -- Color scheme --
-COLORS = {
+# -- Theme definitions --
+DARK_THEME = {
     "bg_dark": "#1a1a2e",
     "bg_medium": "#16213e",
     "bg_light": "#0f3460",
@@ -24,6 +24,51 @@ COLORS = {
     "chart_grid": "#2d3436",
     "border": "#2d3436",
 }
+
+LIGHT_THEME = {
+    "bg_dark": "#f0f0f5",
+    "bg_medium": "#e0e0e8",
+    "bg_light": "#c8c8d8",
+    "accent": "#e94560",
+    "accent_green": "#00a884",
+    "accent_blue": "#0874d3",
+    "accent_yellow": "#e5b84e",
+    "accent_orange": "#d16045",
+    "accent_purple": "#8a7bfe",
+    "text_primary": "#1a1a2e",
+    "text_secondary": "#4a4a5a",
+    "text_dim": "#8a8a9a",
+    "gauge_bg": "#c0c0d0",
+    "chart_grid": "#d0d0d8",
+    "border": "#b0b0c0",
+}
+
+# Active color scheme (mutable dict - updated in place for theme switching)
+COLORS = dict(DARK_THEME)
+
+_theme_callbacks = []
+
+
+def register_theme_callback(callback):
+    """Register a callback to be called when theme changes."""
+    _theme_callbacks.append(callback)
+
+
+def set_theme(theme_name):
+    """Switch between 'dark' and 'light' themes."""
+    source = DARK_THEME if theme_name == "dark" else LIGHT_THEME
+    COLORS.update(source)
+    for cb in _theme_callbacks:
+        try:
+            cb()
+        except Exception:
+            pass
+
+
+def get_current_theme():
+    """Return 'dark' or 'light' based on current COLORS."""
+    return "dark" if COLORS["bg_dark"] == DARK_THEME["bg_dark"] else "light"
+
 
 # Severity colors for usage percentages
 def get_usage_color(percent):
@@ -58,6 +103,7 @@ class ArcGauge(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
+        self.configure(bg=COLORS["bg_dark"])
         cx, cy = self.size / 2, self.size / 2
         r = (self.size - self.thickness) / 2 - 4
         start_angle = 225
@@ -144,6 +190,7 @@ class LineChart(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
+        self.configure(bg=COLORS["bg_dark"])
         pl, pr = self.padding["left"], self.padding["right"]
         pt, pb = self.padding["top"], self.padding["bottom"]
         plot_w = self.chart_width - pl - pr
@@ -259,6 +306,7 @@ class BarMeter(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
+        self.configure(bg=COLORS["bg_dark"])
         h = self.bar_height
         label_offset = 0
 
@@ -337,6 +385,11 @@ class InfoRow(tk.Frame):
 
     def set_value(self, value):
         self.value_widget.config(text=str(value))
+
+    def apply_theme(self):
+        self.configure(bg=COLORS["bg_dark"])
+        self.label_widget.configure(fg=COLORS["text_secondary"], bg=COLORS["bg_dark"])
+        self.value_widget.configure(fg=COLORS["text_primary"], bg=COLORS["bg_dark"])
 
 
 class SectionHeader(tk.Frame):
