@@ -1,1 +1,5 @@
 psutil>=5.9.0
+
+# Optional: GPU monitoring (NVIDIA)
+# pynvml>=11.0.0
+# GPUtil>=1.4.0
