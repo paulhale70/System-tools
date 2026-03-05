@@ -1,4 +1,5 @@
 import sqlite3
+import json
 import os
 from datetime import datetime
 
@@ -30,8 +31,51 @@ def init_db():
                 updated_date    TEXT
             )
         ''')
+
+        # Migration: add genre column to existing databases
+        try:
+            conn.execute("ALTER TABLE items ADD COLUMN genre TEXT DEFAULT ''")
+        except Exception:
+            pass  # column already exists
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS lookup_cache (
+                upc       TEXT PRIMARY KEY,
+                result    TEXT NOT NULL,
+                cached_at TEXT NOT NULL
+            )
+        ''')
+
         conn.commit()
 
+
+# ── Lookup cache ───────────────────────────────────────────────────────────────
+
+def cache_get(upc: str) -> dict | None:
+    """Return cached lookup result for upc, or None if not cached."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT result FROM lookup_cache WHERE upc = ?", (upc,)
+        ).fetchone()
+        if row:
+            try:
+                return json.loads(row['result'])
+            except Exception:
+                return None
+    return None
+
+
+def cache_set(upc: str, result: dict) -> None:
+    """Store a lookup result in the cache."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO lookup_cache (upc, result, cached_at) VALUES (?, ?, ?)",
+            (upc, json.dumps(result), datetime.now().isoformat())
+        )
+        conn.commit()
+
+
+# ── Item CRUD ──────────────────────────────────────────────────────────────────
 
 def add_item(item):
     now = datetime.now().isoformat()
@@ -52,13 +96,14 @@ def add_item(item):
 
         conn.execute('''
             INSERT INTO items
-                (upc, title, category, artist_author, year, publisher_label,
+                (upc, title, category, genre, artist_author, year, publisher_label,
                  thumbnail_url, quantity, condition, notes, added_date, updated_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             upc or None,
             item['title'],
             item['category'],
+            item.get('genre', ''),
             item.get('artist_author', ''),
             item.get('year', ''),
             item.get('publisher_label', ''),

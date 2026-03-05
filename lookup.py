@@ -11,6 +11,7 @@ Priority order:
 """
 
 import time
+import database as _db
 
 try:
     import requests
@@ -24,6 +25,31 @@ HEADERS = {
 TIMEOUT = 10
 
 
+def validate_barcode(upc: str) -> tuple[bool, str]:
+    """Return (True, '') if upc looks like a valid barcode, else (False, reason)."""
+    upc = upc.strip()
+    if not upc:
+        return False, "Please enter a barcode"
+    # ISBN-10: 10 chars, first 9 digits, last digit or 'X'
+    if len(upc) == 10:
+        body, check = upc[:9], upc[9].upper()
+        if body.isdigit() and (check.isdigit() or check == 'X'):
+            return True, ""
+        return False, "ISBN-10 must be 9 digits followed by a digit or X"
+    # All other formats must be digits only
+    if not upc.isdigit():
+        return False, "Barcode must contain digits only"
+    if len(upc) == 6:   # UPC-E short form
+        return True, ""
+    if len(upc) == 8:   # EAN-8
+        return True, ""
+    if len(upc) == 12:  # UPC-A
+        return True, ""
+    if len(upc) == 13:  # EAN-13 / ISBN-13
+        return True, ""
+    return False, f"Unrecognized barcode length ({len(upc)}); expected 6, 8, 10, 12, or 13"
+
+
 def lookup_upc(upc: str) -> dict | None:
     """Return a result dict or None if nothing found."""
     if not REQUESTS_AVAILABLE:
@@ -33,26 +59,37 @@ def lookup_upc(upc: str) -> dict | None:
     if not upc:
         return None
 
+    # Cache check — avoids hitting APIs for repeated scans
+    cached = _db.cache_get(upc)
+    if cached:
+        return cached
+
+    result = None
+
     # 1) UPCitemdb — good for all categories
     result = _upcitemdb(upc)
     if result:
+        _db.cache_set(upc, result)
         return result
 
     # 2) Google Books — ISBN-13 (starts with 978 or 979, length 13)
     if len(upc) in (10, 13) and (len(upc) == 10 or upc[:3] in ('978', '979')):
         result = _google_books(upc)
         if result:
+            _db.cache_set(upc, result)
             return result
 
     # 3) Open Library — another book fallback
     if len(upc) in (10, 13):
         result = _open_library(upc)
         if result:
+            _db.cache_set(upc, result)
             return result
 
     # 4) MusicBrainz — CD / music releases
     result = _musicbrainz(upc)
     if result:
+        _db.cache_set(upc, result)
         return result
 
     return None

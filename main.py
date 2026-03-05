@@ -14,6 +14,7 @@ import threading
 import csv
 import io
 import os
+import shutil
 from datetime import datetime
 
 import database
@@ -47,6 +48,11 @@ BORDER     = "#3a3b5c"
 
 CATEGORIES = ["CD", "Book", "Blu-ray"]
 CONDITIONS = ["Sealed", "Mint", "Very Good", "Good", "Fair", "Poor"]
+GENRES = {
+    "CD":      ["", "Album", "Single", "EP", "Compilation", "Soundtrack", "Classical"],
+    "Book":    ["", "Fiction", "Non-fiction", "Graphic Novel", "Reference", "Children's"],
+    "Blu-ray": ["", "Standard", "4K UHD", "Box Set", "Anime", "Documentary"],
+}
 
 CAT_COLORS = {
     "CD":      "#1d3557",
@@ -140,6 +146,10 @@ class App(tk.Tk):
                   bg=PANEL, fg=SUBTEXT, relief='flat',
                   padx=10, pady=5, cursor='hand2',
                   command=self._export_csv).pack(side='right')
+        tk.Button(bar, text="Backup DB",
+                  bg=PANEL, fg=SUBTEXT, relief='flat',
+                  padx=10, pady=5, cursor='hand2',
+                  command=self._backup_db).pack(side='right', padx=(0, 6))
 
     def _build_scan_bar(self):
         bar = tk.Frame(self, bg=PANEL)
@@ -218,6 +228,7 @@ class App(tk.Tk):
                              relief='flat', font=('Segoe UI', 10),
                              highlightthickness=1, highlightbackground=BORDER)
                 e.pack(fill='x', ipady=4, ipadx=4)
+                return e
             elif kind == 'combo':
                 var = tk.StringVar(value=default or (opts[0] if opts else ''))
                 setattr(self, attr, var)
@@ -225,8 +236,20 @@ class App(tk.Tk):
                                   values=opts, state='readonly',
                                   font=('Segoe UI', 10))
                 cb.pack(fill='x')
+                return cb
 
-        field("Category",         "v_category",  'combo', CATEGORIES, CATEGORIES[0])
+        cat_combo = field("Category", "v_category", 'combo', CATEGORIES, CATEGORIES[0])
+        cat_combo.bind('<<ComboboxSelected>>', self._on_category_change)
+
+        # Genre — options depend on category
+        tk.Label(form, text="Genre", bg=PANEL, fg=SUBTEXT,
+                 font=('Segoe UI', 8)).pack(anchor='w', pady=(5, 1))
+        self.genre_var = tk.StringVar()
+        self.genre_combo = ttk.Combobox(form, textvariable=self.genre_var,
+                                        values=GENRES.get(CATEGORIES[0], []),
+                                        state='readonly', font=('Segoe UI', 10))
+        self.genre_combo.pack(fill='x')
+
         field("Title",            "v_title")
         field("Artist / Author",  "v_artist")
         field("Year",             "v_year")
@@ -325,9 +348,9 @@ class App(tk.Tk):
         tree_frame = tk.Frame(right, bg=BG)
         tree_frame.pack(fill='both', expand=True)
 
-        cols = ('upc', 'title', 'category', 'artist_author', 'year', 'qty', 'condition')
-        heads = ('UPC / ISBN', 'Title', 'Category', 'Artist / Author', 'Year', 'Qty', 'Condition')
-        widths = (130, 260, 75, 190, 55, 38, 85)
+        cols = ('upc', 'title', 'category', 'genre', 'artist_author', 'year', 'qty', 'condition')
+        heads = ('UPC / ISBN', 'Title', 'Category', 'Genre', 'Artist / Author', 'Year', 'Qty', 'Condition')
+        widths = (130, 230, 75, 110, 170, 50, 38, 85)
 
         self.tree = ttk.Treeview(
             tree_frame, columns=cols, show='headings',
@@ -386,6 +409,10 @@ class App(tk.Tk):
         upc = self.scan_var.get().strip()
         if not upc:
             return
+        valid, err = lookup.validate_barcode(upc)
+        if not valid:
+            self._set_status(f"Invalid barcode: {err}", DANGER)
+            return
         self._set_status(f"Looking up {upc} …", WARNING)
         self.scan_btn.config(state='disabled')
         self.add_btn.config(state='disabled')
@@ -411,6 +438,8 @@ class App(tk.Tk):
             if cat not in CATEGORIES:
                 cat = 'CD'
             self.v_category.set(cat)
+            self._on_category_change()
+            self.genre_var.set(result.get('genre', ''))
             self.v_title.set(result.get('title', ''))
             self.v_artist.set(result.get('artist_author', ''))
             self.v_year.set(result.get('year', ''))
@@ -483,6 +512,7 @@ class App(tk.Tk):
             'upc':             (self.current_scan or {}).get('upc', ''),
             'title':           title,
             'category':        self.v_category.get(),
+            'genre':           self.genre_var.get(),
             'artist_author':   self.v_artist.get().strip(),
             'year':            self.v_year.get().strip(),
             'publisher_label': self.v_label.get().strip(),
@@ -516,6 +546,7 @@ class App(tk.Tk):
             self.selected_id,
             title=title,
             category=self.v_category.get(),
+            genre=self.genre_var.get(),
             artist_author=self.v_artist.get().strip(),
             year=self.v_year.get().strip(),
             publisher_label=self.v_label.get().strip(),
@@ -560,6 +591,7 @@ class App(tk.Tk):
                     item.get('upc') or '',
                     item.get('title', ''),
                     item.get('category', ''),
+                    item.get('genre') or '',
                     item.get('artist_author') or '',
                     item.get('year') or '',
                     item.get('quantity', 1),
@@ -606,6 +638,8 @@ class App(tk.Tk):
 
         cat = item.get('category', CATEGORIES[0])
         self.v_category.set(cat if cat in CATEGORIES else CATEGORIES[0])
+        self._on_category_change()
+        self.genre_var.set(item.get('genre', '') or '')
         self.v_title.set(item.get('title', ''))
         self.v_artist.set(item.get('artist_author', '') or '')
         self.v_year.set(item.get('year', '') or '')
@@ -631,6 +665,21 @@ class App(tk.Tk):
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
+    def _on_category_change(self, _event=None):
+        cat = self.v_category.get()
+        self.genre_combo.configure(values=GENRES.get(cat, [""]))
+        self.genre_var.set('')
+
+    def _backup_db(self):
+        dest = filedialog.asksaveasfilename(
+            defaultextension=".db",
+            filetypes=[("SQLite database", "*.db"), ("All files", "*.*")],
+            initialfile="media_inventory_backup.db",
+        )
+        if dest:
+            shutil.copy2(database.DB_PATH, dest)
+            messagebox.showinfo("Backup", f"Database backed up to:\n{dest}")
+
     def _clear_detail(self):
         self.current_scan = None
         self.selected_id = None
@@ -647,6 +696,8 @@ class App(tk.Tk):
         self.v_label.set('')
         self.v_quantity.set('1')
         self.v_category.set(CATEGORIES[0])
+        self._on_category_change()
+        self.genre_var.set('')
         self.v_condition.set(CONDITIONS[3])
         self.v_notes.delete('1.0', 'end')
 
